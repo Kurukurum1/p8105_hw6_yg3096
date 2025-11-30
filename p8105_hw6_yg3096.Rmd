@@ -200,4 +200,100 @@ narrow spreads.
 
 ## Problem 3
 ```{r}
+# Read data
+bw_raw <- readr::read_csv("data/birthweight.csv", show_col_types = FALSE) 
+
+# Process data
+bw <- bw_raw %>%
+      janitor::clean_names() %>%
+      mutate(babysex = factor(babysex, levels = c(1, 2), 
+                              labels = c("Male", "Female")),
+             malform = factor(malform, levels = c(0, 1), 
+                              labels = c("Absent", "Present")),
+             mrace = factor(mrace, levels = c(1, 2, 3, 4, 8),
+                            labels = c("White","Black","Asian",
+                                       "Puerto Rican","Other")),
+             frace = factor(frace, levels = c(1, 2, 3, 4, 8, 9), 
+                            labels = c("White","Black","Asian","Puerto Rican",
+                                       "Other","Unknown")))
+vars_use <- c("bwt", "bhead", "blength", "gaweeks", "babysex", "momage", 
+              "ppbmi", "wtgain", "smoken", "parity")
+bw_mod <- bw %>% 
+          drop_na(all_of(vars_use))
+
+# Fit model
+mod_spec <- bwt ~ bhead + blength + gaweeks + babysex + momage + ppbmi + 
+                  wtgain + smoken + parity
+mod_main <- lm(mod_spec, data = bw_mod)
+
+# Result
+glance(mod_main) %>% 
+select(r.squared, adj.r.squared, sigma)
+tidy(mod_main) # coefficients and significance
+
+# Model residuals
+bw_result <- bw_mod %>%
+             add_predictions(mod_main) %>%
+             add_residuals(mod_main)
+
+# Plot of model residuals against fitted values 
+bw_result %>%
+ggplot(aes(x = pred, y = resid)) + geom_point(alpha = 0.25) + 
+geom_smooth(se = FALSE, method = "loess") + 
+labs(title = "Residuals vs Fitted", x = "Fitted birthweight (g)", 
+     y = "Residual (g)") + theme_minimal(base_size = 12)
+
+# Cross-validation
+cv_df <- crossv_mc(bw_mod, n = 100)  # 100 次随机切分，课程常用规模
+cv_comp <- cv_df %>%
+           mutate(m_main = map(train, ~ lm(mod_spec, data = as.data.frame(.x))),
+                  m_a = map(train, ~ lm(bwt ~ blength + gaweeks, 
+                                        data = as.data.frame(.x))),
+                  m_b = map(train, ~ lm(bwt ~ bhead * blength * babysex, 
+                                        data = as.data.frame(.x))),
+                  rmse_main = map2_dbl(m_main, test, ~ rmse(.x, 
+                                                            as.data.frame(.y))),
+                  rmse_a = map2_dbl(m_a, test, ~ rmse(.x, as.data.frame(.y))),
+                  rmse_b = map2_dbl(m_b, test, ~ rmse(.x, 
+                                                      as.data.frame(.y)))) %>%
+           select(starts_with("rmse_")) %>%
+           pivot_longer(everything(), names_to = "model", 
+                        values_to = "rmse") %>%
+           mutate(model = recode(model, rmse_main = "Proposed (multi-factor)",
+                                 rmse_a = "Length + GA (main effects)",
+                                 rmse_b = "Head*Length*Sex (all interactions)"))
+
+# Summary
+cv_summary <- cv_comp %>%
+              group_by(model) %>%
+              summarise(mean_rmse = mean(rmse), sd_rmse = sd(rmse), 
+                        .groups = "drop") %>%
+              arrange(mean_rmse)
+cv_summary
+
+# Plot of 3 models' rmse
+cv_comp %>%
+ggplot(aes(x = model, y = rmse)) + geom_violin(fill = "grey95") + 
+geom_boxplot(width = 0.15, outlier.alpha = 0.2) + coord_flip() +
+labs(title = "Cross-validated RMSE by model (n = 100 splits)", x = NULL, 
+     y = "RMSE (grams)") + theme_minimal(base_size = 12)
 ```
+
+The following linear model is proposed (where bwt is in grams): bwt ∼ bhead +  
+blength + gaweeks + babysex + momage + ppbmi + wtgain + smoken + parity. bhead,  
+blength and gaweeks directly reflect the fetal body size and gestational age,  
+and are the core determinants of the fetal weight; babysex reflects gender  
+differences; momage, ppbmi, wtgain reflect the maternal nutritional status;   
+smoken reflects the effect of smoking during pregnancy and parity reflects the  
+possible influence of previous childbirth history on body weight.  
+The result of this model on the data is R^2 = 0.699 (after adjustment 0.699),  
+and the residual standard deviation is approximately 281 g, indicating that  
+the model can explain about 70% of the weight variation. Within the main fitting  
+range (approximately 2600–3800 g), the residuals are symmetrically distributed  
+around 0 and no systematic bias is observed. 
+
+Comparing the prediction errors (RMSE in grams) of the three models, the  
+proposed multi-factor model is mean 282 g (SD 9.7), minimum; the model of Head *  
+Length * Sex with all interactions included is mean 289 g (SD 10.7), slightly  
+lower; and the model of only the main effect of Length + GA is mean 333 g  
+(SD 14.8), the worst of all.
