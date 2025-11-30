@@ -100,7 +100,7 @@ city_or <- homi %>%
            arrange(OR)
 head(city_or)
 
-# Plot for odds ratio
+# Plot of odds ratio
 plot <- city_or %>%
         mutate(city_state = forcats::fct_reorder(city_state, OR)) %>%
         ggplot(aes(x = city_state, y = OR)) +
@@ -121,7 +121,83 @@ to be solved.
 
 ## Problem 2
 ```{r}
+# Filter data
+data <- weather_df %>%
+        drop_na(tmax, tmin, prcp)
+nrow(data)
 
+# Fit model
+fit_full <- lm(tmax ~ tmin + prcp, data = data)
+full_r2 <- glance(fit_full)$r.squared
+full_tmin <- tidy(fit_full) %>% 
+             filter(term == "tmin") %>% 
+             pull(estimate)
+full_prcp <- tidy(fit_full) %>% 
+             filter(term == "prcp") %>% 
+             pull(estimate)
+est_full <- tibble(param = c("r2", "beta_tmin", "beta_prcp"),
+                   est = c(full_r2, full_tmin, full_prcp))
+
+# Helper function
+boot_once <- function(df) {
+             idx <- sample.int(nrow(df), nrow(df), replace = TRUE)
+             dfb <- df[idx, , drop = FALSE]
+             fit <- lm(tmax ~ tmin + prcp, data = dfb)
+             tibble(r2 = glance(fit)$r.squared,
+                    beta_tmin = tidy(fit) %>% 
+                    filter(term == "tmin") %>% 
+                    pull(estimate), beta_prcp  = tidy(fit) %>% 
+                    filter(term == "prcp") %>% 
+                    pull(estimate))
+}
+
+loop <- 5000
+result <- vector("list", loop)
+for (i in seq_len(loop)) {
+  result[[i]] <- boot_once(data)
+}
+
+# Bootstrap
+boot <- bind_rows(result)
+dim(boot)
+head(boot)
+
+# Confidence interval
+ci_r2 <- quantile(boot$r2, c(0.025, 0.975), na.rm = TRUE)
+ci_tmin <- quantile(boot$beta_tmin, c(0.025, 0.975), na.rm = TRUE)
+ci_prcp <- quantile(boot$beta_prcp, c(0.025, 0.975), na.rm = TRUE)
+ci_tbl <- tibble(param = c("r2", "beta_tmin", "beta_prcp"),
+                 q2.5 = c(ci_r2[1], ci_tmin[1], ci_prcp[1]),
+                 q97.5 = c(ci_r2[2], ci_tmin[2], ci_prcp[2]))
+ci_tbl
+
+boot_long <- boot %>%
+             pivot_longer(everything(), names_to = "param", 
+                          values_to = "value") %>%
+             mutate(param = recode(param, r2 = "R-squared", 
+                                   beta_tmin = "β (tmin)", 
+                                   beta_prcp = "β (prcp)"))
+# Estimates
+est_full_plot <- est_full %>%
+                 mutate(param = recode(param,r2 = "R-squared", 
+                                       beta_tmin = "β (tmin)", 
+                                       beta_prcp = "β (prcp)"))
+
+# Plot of distribution
+ggplot(boot_long, aes(x = value)) + geom_histogram(bins = 40, color = "white") +
+geom_vline(data = est_full_plot, aes(xintercept = est), color = "red") + 
+facet_wrap(~ param, scales = "free", ncol = 3) + 
+labs(title = "Bootstrap distributions (5000 in total)", x = NULL, y = "Count")
 ```
 
-222
+Histograms of the 5000 estimates are unimodal and roughly symmetric. R^2 is  
+tightly concentrated around about 0.94, indicating good fit. β_1 is centered a  
+little above 1 (about 1.01–1.02), while β_2 is centered near −0.006, showing  
+narrow spreads.
+
+95% bootstrap percentile CIs (2.5%–97.5%) are R^2: [0.934, 0.946], β_1 (tmin):  
+[1.006, 1.028] and β_2 (prcp): [−0.008, 0.004].
+
+## Problem 3
+```{r}
+```
