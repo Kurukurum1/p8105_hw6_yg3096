@@ -5,24 +5,123 @@ output: github_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(broom)
+library(purrr)
+library(modelr)    
+library(p8105.datasets) 
+data("weather_df")
+set.seed(123)
 ```
 
-## R Markdown
+## Problem 1
+```{r}
+# Read data
+homi_raw <- readr::read_csv("data/homicide-data.csv", show_col_types = FALSE)
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+# Clean and process data
+homi <- homi_raw %>%
+        janitor::clean_names() %>%
+        mutate(solved = if_else(disposition == "Closed by arrest", 1L, 0L),
+               # Change unknown age into NA
+               victim_age = na_if(as.character(victim_age), "Unknown"),
+               victim_age = suppressWarnings(as.numeric(victim_age)),
+               # White/Black only
+               victim_race = case_when(victim_race == "White" ~ "White",
+                                       victim_race == "Black" ~ "Black",
+                                       TRUE ~ NA_character_),
+               victim_sex = factor(victim_sex, levels = c("Female", "Male")),
+               victim_race = factor(victim_race, levels = c("White", 
+                                                            "Black"))) %>%
+        # Filter cities
+        filter(!(city == "Dallas" & state == "TX"),
+               !(city == "Phoenix" & state == "AZ"),
+               !(city == "Kansas City" & state == "MO"),
+               !(city == "Tulsa" & state == "AL")) %>%      
+        # Filter race
+        filter(!is.na(victim_race))
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+# Data for baltimore
+bal_df <- homi %>%
+          filter(city == "Baltimore", state == "MD") %>%
+          filter(!is.na(victim_age), !is.na(victim_sex), 
+                 !is.na(victim_race)) %>%
+          droplevels()
 
-```{r cars}
-summary(cars)
+# Fit model for baltimore
+bal_fit <- glm(solved ~ victim_age + victim_sex + victim_race, data = bal_df, 
+               family = binomial())
+
+# Odds ratio
+bal_or <- tidy(bal_fit, exponentiate = TRUE, conf.int = TRUE) %>%
+          filter(term == "victim_sexMale") %>%
+          transmute(city_state = "Baltimore, MD", term, OR = estimate, 
+                    CI_low = conf.low, CI_high = conf.high, p = p.value)
+bal_or
+
+# Helper function for glm
+glm_function <- function(df) {
+                df <- df %>%
+                filter(!is.na(victim_age), !is.na(victim_sex), 
+                       !is.na(victim_race)) %>%
+                droplevels()
+                
+                if (nrow(df) == 0 || n_distinct(df$victim_sex) < 2 ||
+                   n_distinct(df$victim_race) < 2) {
+                   return(NULL)
+                }
+
+                fit <- glm(solved ~ victim_age + victim_sex + victim_race, 
+                           data = df, family = binomial())
+                tidy(fit, exponentiate = TRUE, conf.int = TRUE) %>%
+                filter(term == "victim_sexMale") %>%
+                transmute(OR = estimate, CI_low = conf.low, CI_high = conf.high, 
+                          p = p.value)
+}
+
+# Fit for all cities
+city_or <- homi %>%
+           group_by(city, state) %>%
+           group_split() %>%
+           map_dfr(function(df) {
+           this_city <- df$city[1]
+           this_state <- df$state[1]
+           res <- glm_function(df)
+           if (is.null(res) || nrow(res) == 0) {
+             tibble(city = this_city, state = this_state,
+             OR = NA_real_, CI_low = NA_real_, CI_high = NA_real_, 
+             p = NA_real_)
+           } else {
+             res %>% mutate(city = this_city, state = this_state, .before = 1)
+           }
+           }) %>%
+           filter(!is.na(OR)) %>%
+           mutate(city_state = paste(city, state, sep = ", ")) %>%
+           arrange(OR)
+head(city_or)
+
+# Plot for odds ratio
+plot <- city_or %>%
+        mutate(city_state = forcats::fct_reorder(city_state, OR)) %>%
+        ggplot(aes(x = city_state, y = OR)) +
+        geom_pointrange(aes(ymin = CI_low, ymax = CI_high)) +
+        coord_flip() + 
+        labs(title = "Adjusted OR of solving homicides: Male vs Female by city",
+             x = NULL, y = "Adjusted OR (Male vs Female)") 
+plot
 ```
 
-## Including Plots
+Across cities, the majority of 95% CIs covers 1, and about 20 cities sit below 1  
+(male-victim cases less likely to be solved). This heterogeneity between cities  
+suggests local context likely matter more than victim sex. Overall, the plot  
+provides little consistent evidence that homicides with male victim are resolved  
+at markedly different rates than those with female victim, however, in some  
+cities (such as New York and Chicago) male-victim cases are actually less likely  
+to be solved.
 
-You can also embed plots, for example:
+## Problem 2
+```{r}
 
-```{r pressure, echo=FALSE}
-plot(pressure)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+222
